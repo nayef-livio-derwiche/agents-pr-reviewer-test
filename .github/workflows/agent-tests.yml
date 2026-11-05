@@ -1,0 +1,30 @@
+name: Agent tests
+
+# The PR's own copy of this workflow runs: with no secrets and a read-only token.
+on: pull_request
+
+permissions:
+  contents: read
+
+jobs:
+  tests:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.12"
+      # Your project: add your test dependencies here. A failed install is in the output too.
+      - run: |
+          mkdir -p "$RUNNER_TEMP/out" && echo "$PR_NUMBER" > "$RUNNER_TEMP/out/pr-number"
+          pip install pytest -e . > "$RUNNER_TEMP/out/test-results.txt" 2>&1 &&
+            python -m pytest -q >> "$RUNNER_TEMP/out/test-results.txt" 2>&1 || true
+        env:
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+      - uses: actions/upload-artifact@v7
+        with:
+          name: test-results
+          path: ${{ runner.temp }}/out

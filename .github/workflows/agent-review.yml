@@ -1,0 +1,52 @@
+name: Agent review
+
+on:
+  # After each run of Agent tests on a pull request. This workflow and pr_reviewer.py come from the
+  # default branch, with the repository's secrets; no code from the pull request runs here.
+  workflow_run:
+    workflows: [Agent tests]
+    types: [completed]
+
+permissions: {}
+
+jobs:
+  review:
+    if: >-
+      github.event.workflow_run.event == 'pull_request' && github.event.workflow_run.conclusion == 'success'
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    permissions:
+      actions: read  # the artifact of the tests run
+      contents: read
+      pull-requests: write
+    env:
+      GH_TOKEN: ${{ github.token }}
+      HEAD: ${{ github.event.workflow_run.head_sha }}
+    steps:
+      - uses: actions/checkout@v7  # the default branch
+        with:
+          fetch-depth: 0
+      - uses: actions/download-artifact@v8
+        with:
+          name: test-results
+          path: ${{ runner.temp }}/tests
+          run-id: ${{ github.event.workflow_run.id }}
+          github-token: ${{ github.token }}
+      # The pull request wrote the artifact: its number must name the pull request whose head was tested.
+      - run: |
+          number=$(head -c 20 "$RUNNER_TEMP/tests/pr-number")
+          [[ "$number" =~ ^[0-9]+$ ]] || { echo "The artifact's PR number is not a number."; exit 1; }
+          read -r pr_head base < <(gh pr view "$number" --json headRefOid,baseRefOid --jq '.headRefOid + " " + .baseRefOid')
+          [ "$pr_head" = "$HEAD" ] || { echo "PR $number's head is not the tested commit: a newer push gets its own run."; exit 1; }
+          git fetch --no-tags origin "refs/pull/$number/head"  # the PR's commits, read as text only
+          git cat-file -e "$HEAD^{commit}" || { echo "The tested commit is gone: a newer push gets its own run."; exit 1; }
+          echo "PR_NUMBER=$number" >> "$GITHUB_ENV"
+          echo "BASE=$base" >> "$GITHUB_ENV"
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.12"
+      - run: pip install "mistralai-agents==1.1.0rc18"
+      - run: python .github/scripts/pr_reviewer.py
+        env:
+          MISTRAL_API_KEY: ${{ secrets.MISTRAL_API_KEY }}
+          TEST_RESULTS: ${{ runner.temp }}/tests/test-results.txt
